@@ -17,7 +17,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from repo root
+# Load .env from repo root before importing agent modules
 REPO_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(REPO_ROOT / ".env")
 
@@ -41,6 +41,7 @@ def process_tickets(input_path: Path, output_path: Path, store, verbose: bool = 
 
     total = len(rows)
     results = []
+    start_time = time.time()
 
     if verbose:
         print(f"\nProcessing {total} tickets from {input_path.name}...")
@@ -54,6 +55,7 @@ def process_tickets(input_path: Path, output_path: Path, store, verbose: bool = 
         if verbose:
             print(f"\n[{i}/{total}] Company: {company or 'None'} | Subject: {subject[:50] or '(empty)'}...")
 
+        ticket_start = time.time()
         try:
             result = triage_ticket(store, issue, subject, company)
         except Exception as e:
@@ -65,6 +67,7 @@ def process_tickets(input_path: Path, output_path: Path, store, verbose: bool = 
                 "justification": f"Agent error: {str(e)[:200]}",
                 "request_type": "product_issue",
             }
+        ticket_elapsed = time.time() - ticket_start
 
         output_row = {
             "Issue": issue,
@@ -78,23 +81,21 @@ def process_tickets(input_path: Path, output_path: Path, store, verbose: bool = 
         results.append(output_row)
 
         if verbose:
-            print(f"  Status: {result['status']} | Type: {result['request_type']} | Area: {result['product_area']}")
-
-        # Small delay to respect rate limits
-        if i < total:
-            time.sleep(0.5)
+            print(f"  Status: {result['status']} | Type: {result['request_type']} | Area: {result['product_area']} ({ticket_elapsed:.1f}s)")
 
     with open(output_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=OUTPUT_COLUMNS)
         writer.writeheader()
         writer.writerows(results)
 
+    elapsed = time.time() - start_time
     if verbose:
         print(f"\n{'=' * 60}")
         print(f"Done! Results written to {output_path}")
         replied = sum(1 for r in results if r["Status"].lower() == "replied")
         escalated = sum(1 for r in results if r["Status"].lower() == "escalated")
         print(f"  Replied: {replied} | Escalated: {escalated}")
+        print(f"  Total time: {elapsed:.1f}s ({elapsed/total:.1f}s per ticket)")
 
 
 def interactive_mode(store, issue: str, company: str = "None"):
@@ -117,7 +118,6 @@ def main():
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
     args = parser.parse_args()
 
-    # Validate GROQ_API_KEY
     if not os.environ.get("GROQ_API_KEY"):
         print("ERROR: GROQ_API_KEY environment variable is not set.")
         print("Set it in your .env file or export it: export GROQ_API_KEY=your_key")
