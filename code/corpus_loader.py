@@ -32,7 +32,11 @@ def load_corpus() -> List[Document]:
         domain_label = DOMAIN_MAP.get(domain_key, domain_key)
 
         for md_path in sorted(domain_dir.rglob("*.md")):
-            text = md_path.read_text(encoding="utf-8", errors="replace").strip()
+            try:
+                text = md_path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError as e:
+                print(f"Warning: skipping unreadable corpus file {md_path}: {e}")
+                continue
             if not text:
                 continue
 

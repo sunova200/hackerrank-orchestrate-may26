@@ -17,13 +17,18 @@ from corpus_loader import load_corpus, REPO_ROOT
 INDEX_DIR = REPO_ROOT / "data" / "index"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
+_embeddings_cache = None
+
 
 def get_embeddings() -> HuggingFaceEmbeddings:
-    return HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True, "batch_size": 64},
-    )
+    global _embeddings_cache
+    if _embeddings_cache is None:
+        _embeddings_cache = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True, "batch_size": 64},
+        )
+    return _embeddings_cache
 
 
 def build_vector_store(force_rebuild: bool = False) -> FAISS:
@@ -43,8 +48,8 @@ def build_vector_store(force_rebuild: bool = False) -> FAISS:
     print(f"Loaded {len(documents)} raw documents")
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
+        chunk_size=800,
+        chunk_overlap=150,
         separators=["\n## ", "\n### ", "\n#### ", "\n\n", "\n", ". ", " "],
     )
     chunks = splitter.split_documents(documents)
@@ -59,27 +64,34 @@ def build_vector_store(force_rebuild: bool = False) -> FAISS:
     return store
 
 
-def get_retriever(
-    store: FAISS,
-    domain: Optional[str] = None,
-    k: int = 8,
-):
-    """Return a retriever, optionally filtered to a specific domain."""
-    search_kwargs = {"k": k}
-    if domain and domain != "None":
-        search_kwargs["filter"] = {"domain": domain}
-    return store.as_retriever(search_kwargs=search_kwargs)
-
-
 def retrieve_relevant_docs(
     store: FAISS,
     query: str,
     domain: Optional[str] = None,
-    k: int = 8,
+    k: int = 6,
 ) -> List[Document]:
-    """Retrieve the most relevant documents for a query."""
-    retriever = get_retriever(store, domain=domain, k=k)
-    return retriever.invoke(query)
+    """Retrieve the most relevant documents for a query.
+
+    Uses domain-filtered search first, then supplements with global results
+    if needed.
+    """
+    search_kwargs = {"k": k}
+    if domain and domain != "None":
+        search_kwargs["filter"] = {"domain": domain}
+
+    docs = store.similarity_search(query, **search_kwargs)
+
+    # Supplement with global results if domain-filtered returned few results
+    if len(docs) < 3 and domain and domain != "None":
+        global_docs = store.similarity_search(query, k=k)
+        seen_sources = {d.metadata.get("source") for d in docs}
+        for d in global_docs:
+            if d.metadata.get("source") not in seen_sources:
+                docs.append(d)
+                if len(docs) >= k:
+                    break
+
+    return docs
 
 
 if __name__ == "__main__":
